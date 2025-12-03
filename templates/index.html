@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>Traceability Dashboard</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="container">
+    <h1>AeroNetB 数据仪表盘</h1>
+
+    <div id="auth">
+      <form id="login-form">
+        <label for="username">用户名</label>
+        <input type="text" id="username" placeholder="用户名" required />
+        <label for="password">密码</label>
+        <input type="password" id="password" placeholder="密码" required />
+        <button type="submit">登录</button>
+      </form>
+      <div id="user-info" style="display:none"></div>
+    </div>
+
+    <div id="dataset-tabs" class="tabs">
+      <button data-dataset="client" class="tab active">客户表</button>
+      <button data-dataset="order" class="tab">生产订单表</button>
+      <button data-dataset="relation" class="tab">组件-零件关联表</button>
+    </div>
+
+    <div class="toolbar">
+      <label for="search" class="sr-only">搜索</label>
+      <input id="search" type="text" placeholder="搜索...（按当前表字段包含匹配）" />
+      <div class="pager">
+        <button id="prev-page">上一页</button>
+        <span id="page-info">第 1 页</span>
+        <button id="next-page">下一页</button>
+      </div>
+    </div>
+
+    <div id="error" class="error" style="display:none"></div>
+    <div id="loading" class="loading" style="display:none">加载中...</div>
+
+    <div id="admin-panel" style="display:none">
+      <h2 id="form-title">创建</h2>
+      <form id="create-form"></form>
+    </div>
+
+    <div class="table-wrap">
+      <table id="data-table">
+        <thead></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div id="empty" class="empty" style="display:none">暂无数据</div>
+  </div>
+
+  <script>
+    let token = null;
+    let role = 'guest';
+    let current = 'client';
+    let allRows = [];
+    let page = 1;
+    const pageSize = 10;
+
+    const endpoints = {
+      client: { list: '/clients', create: '/clients', del: (id) => `/clients/${id}` },
+      order: { list: '/production-orders', create: '/production-orders', del: (id) => `/production-orders/${id}` },
+      relation: { list: '/component-part-relations', create: '/component-part-relations', del: (id) => `/component-part-relations/${id}` },
+    };
+
+    const tableSchemas = {
+      client: {
+        headers: ['ClientID','ClientName','ClientType','ContactPerson','ContactPhone','Email','CoopStartDate','QualificationLevel','Actions'],
+        row: (c) => [c.clientid, c.clientname, c.clienttype, c.contactperson, c.contactphone, c.email, c.cooperationstartdate, c.qualificationlevel, actionButtons(c.clientid)],
+        idField: 'clientid',
+      },
+      order: {
+        headers: ['OrderID','ClientID','OrderType','OrderStatus','OrderTime','RequiredFinish','ActualFinish','Amount','Priority','Actions'],
+        row: (o) => [o.orderid, o.clientid, o.ordertype, o.orderstatus, new Date(o.ordertime).toLocaleString(), new Date(o.requiredfinishtime).toLocaleString(), o.actualfinishtime ? new Date(o.actualfinishtime).toLocaleString() : '', o.orderamount, o.priority, actionButtons(o.orderid)],
+        idField: 'orderid',
+      },
+      relation: {
+        headers: ['RelationID','ComponentID','PartID','RequiredQty','AssemblyPosition','ProcessRequirement','Actions'],
+        row: (r) => [r.relationid, r.componentid, r.partid, r.requiredquantity, r.assemblyposition, r.processrequirement, actionButtons(r.relationid)],
+        idField: 'relationid',
+      },
+    };
+
+    function setLoading(on) {
+      document.getElementById('loading').style.display = on ? 'block' : 'none';
+    }
+    function showError(msg) {
+      const el = document.getElementById('error');
+      el.textContent = msg || '';
+      el.style.display = msg ? 'block' : 'none';
+    }
+    function toggleEmpty(show) {
+      document.getElementById('empty').style.display = show ? 'block' : 'none';
+    }
+
+    function actionButtons(id) {
+      return role === 'admin' ? `<button class="delete-btn" data-id="${id}">删除</button>` : '';
+    }
+
+    function renderTableHeader(headers) {
+      const thead = document.querySelector('#data-table thead');
+      thead.innerHTML = `<tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr>`;
+    }
+
+    function renderPage() {
+      const tbody = document.querySelector('#data-table tbody');
+      const search = document.getElementById('search').value.trim().toLowerCase();
+      const filtered = !search ? allRows : allRows.filter(r => JSON.stringify(r).toLowerCase().includes(search));
+      const total = filtered.length;
+      const maxPage = Math.max(1, Math.ceil(total / pageSize));
+      page = Math.min(page, maxPage);
+      document.getElementById('page-info').textContent = `第 ${page} 页 / 共 ${maxPage} 页（${total} 条）`;
+      tbody.innerHTML = '';
+      toggleEmpty(total === 0);
+      const start = (page - 1) * pageSize;
+      const slice = filtered.slice(start, start + pageSize);
+      for (const row of slice) {
+        const tr = document.createElement('tr');
+        const cells = tableSchemas[current].row(row);
+        tr.innerHTML = cells.map(c => `<td title="${String(c).replace(/"/g,'&quot;')}">${c}</td>`).join('');
+        tbody.appendChild(tr);
+      }
+    }
+
+    async function fetchList() {
+      setLoading(true);
+      showError('');
+      toggleEmpty(false);
+      try {
+        const res = await fetch(endpoints[current].list);
+        if (!res.ok) {
+          showError(`加载失败: ${res.status}`);
+          allRows = [];
+          renderPage();
+          return;
+        }
+        allRows = await res.json();
+        page = 1;
+        renderPage();
+      } catch (e) {
+        showError(e.message || '加载失败');
+        allRows = [];
+        renderPage();
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    function renderForm() {
+      const panel = document.getElementById('admin-panel');
+      panel.style.display = role === 'admin' ? 'block' : 'none';
+      const form = document.getElementById('create-form');
+      if (current === 'client') {
+        form.innerHTML = `
+          <input name="clientid" placeholder="ClientID" required />
+          <input name="clientname" placeholder="ClientName" required />
+          <select name="clienttype">
+            <option>整机厂</option>
+            <option>维修厂</option>
+            <option>运营商</option>
+          </select>
+          <input name="contactperson" placeholder="ContactPerson" required />
+          <input name="contactphone" placeholder="ContactPhone" required />
+          <input name="email" type="email" placeholder="Email" required />
+          <input name="cooperationstartdate" type="date" placeholder="CoopStartDate" required />
+          <select name="qualificationlevel">
+            <option>S</option>
+            <option>A</option>
+            <option>B</option>
+            <option selected>C</option>
+          </select>
+          <button type="submit">创建</button>`;
+      } else if (current === 'order') {
+        form.innerHTML = `
+          <input name="orderid" placeholder="OrderID" required />
+          <input name="clientid" placeholder="ClientID" required />
+          <select name="ordertype">
+            <option>机身组件</option>
+            <option>机翼组件</option>
+            <option>定制组件</option>
+          </select>
+          <select name="orderstatus">
+            <option>设计中</option>
+            <option>生产中</option>
+            <option>检测中</option>
+            <option>已交付</option>
+            <option>已取消</option>
+          </select>
+          <input name="requiredfinishtime" type="datetime-local" placeholder="RequiredFinish" required />
+          <input name="actualfinishtime" type="datetime-local" placeholder="ActualFinish" />
+          <input name="orderamount" type="number" step="0.01" placeholder="Amount" required />
+          <input name="priority" type="number" min="1" max="5" value="3" placeholder="Priority" />
+          <button type="submit">创建</button>`;
+      } else if (current === 'relation') {
+        form.innerHTML = `
+          <input name="relationid" placeholder="RelationID" required />
+          <input name="componentid" placeholder="ComponentID" required />
+          <input name="partid" placeholder="PartID" required />
+          <input name="requiredquantity" type="number" min="1" step="1" placeholder="RequiredQty" required />
+          <input name="assemblyposition" placeholder="AssemblyPosition" required />
+          <input name="processrequirement" placeholder="ProcessRequirement" required />
+          <button type="submit">创建</button>`;
+      }
+    }
+
+    async function switchDataset(ds) {
+      current = ds;
+      document.querySelectorAll('#dataset-tabs .tab').forEach(btn => btn.classList.toggle('active', btn.getAttribute('data-dataset') === ds));
+      renderTableHeader(tableSchemas[current].headers);
+      renderForm();
+      await fetchList();
+    }
+
+    document.getElementById('dataset-tabs').addEventListener('click', (e) => {
+      const btn = e.target.closest('.tab');
+      if (!btn) return;
+      const ds = btn.getAttribute('data-dataset');
+      switchDataset(ds);
+    });
+
+    document.getElementById('search').addEventListener('input', () => {
+      page = 1;
+      renderPage();
+    });
+    document.getElementById('prev-page').addEventListener('click', () => {
+      page = Math.max(1, page - 1);
+      renderPage();
+    });
+    document.getElementById('next-page').addEventListener('click', () => {
+      const total = allRows.length;
+      const maxPage = Math.max(1, Math.ceil(total / pageSize));
+      page = Math.min(maxPage, page + 1);
+      renderPage();
+    });
+
+    document.getElementById('create-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (role !== 'admin' || !token) return alert('需要管理员登录');
+      const fd = new FormData(e.target);
+      let body;
+      if (current === 'client') {
+        body = {
+          clientid: fd.get('clientid').trim(),
+          clientname: fd.get('clientname').trim(),
+          clienttype: fd.get('clienttype'),
+          contactperson: fd.get('contactperson').trim(),
+          contactphone: fd.get('contactphone').trim(),
+          email: fd.get('email').trim(),
+          cooperationstartdate: fd.get('cooperationstartdate'),
+          qualificationlevel: fd.get('qualificationlevel'),
+        };
+      } else if (current === 'order') {
+        body = {
+          orderid: fd.get('orderid').trim(),
+          clientid: fd.get('clientid').trim(),
+          ordertype: fd.get('ordertype'),
+          orderstatus: fd.get('orderstatus'),
+          requiredfinishtime: new Date(fd.get('requiredfinishtime')).toISOString(),
+          actualfinishtime: fd.get('actualfinishtime') ? new Date(fd.get('actualfinishtime')).toISOString() : null,
+          orderamount: parseFloat(fd.get('orderamount')),
+          priority: parseInt(fd.get('priority'), 10)
+        };
+      } else if (current === 'relation') {
+        body = {
+          relationid: fd.get('relationid').trim(),
+          componentid: fd.get('componentid').trim(),
+          partid: fd.get('partid').trim(),
+          requiredquantity: parseInt(fd.get('requiredquantity'), 10),
+          assemblyposition: fd.get('assemblyposition').trim(),
+          processrequirement: fd.get('processrequirement').trim(),
+        };
+      }
+      const res = await fetch(endpoints[current].create, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(body)
+      });
+      if (!res.ok) {
+        try {
+          const data = await res.json();
+          alert(data.detail || '操作失败');
+        } catch { alert('操作失败'); }
+      }
+      e.target.reset();
+      await fetchList();
+    });
+
+    document.querySelector('#data-table').addEventListener('click', async (e) => {
+      const btn = e.target.closest('.delete-btn');
+      if (!btn) return;
+      if (role !== 'admin' || !token) return alert('需要管理员登录');
+      const id = btn.getAttribute('data-id');
+      const res = await fetch(endpoints[current].del(id), { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok && res.status !== 204) {
+        try {
+          const data = await res.json();
+          alert(data.detail || '删除失败');
+        } catch { alert('删除失败'); }
+      }
+      await fetchList();
+    });
+
+    async function refreshUser() {
+      if (!token) {
+        role = 'guest';
+        document.getElementById('admin-panel').style.display = 'none';
+        document.getElementById('user-info').style.display = 'none';
+        return;
+      }
+      const res = await fetch('/me', { headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok) {
+        role = 'guest';
+        token = null;
+        document.getElementById('admin-panel').style.display = 'none';
+        document.getElementById('user-info').style.display = 'none';
+        return;
+      }
+      const me = await res.json();
+      role = me.role;
+      const info = document.getElementById('user-info');
+      info.textContent = `已登录: ${me.username} (${me.role})`;
+      info.style.display = 'block';
+      document.getElementById('admin-panel').style.display = role === 'admin' ? 'block' : 'none';
+    }
+
+    document.getElementById('login-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const username = document.getElementById('username').value.trim();
+      const password = document.getElementById('password').value;
+      const body = new URLSearchParams();
+      body.append('username', username);
+      body.append('password', password);
+      body.append('grant_type', 'password');
+      const res = await fetch('/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body });
+      if (!res.ok) {
+        const data = await res.json();
+        alert(data.detail || '登录失败');
+        return;
+      }
+      const data = await res.json();
+      token = data.access_token;
+      await refreshUser();
+      await switchDataset(current);
+    });
+
+    // Initial render
+    refreshUser();
+    switchDataset('client');
+  </script>
+</body>
+</html>
