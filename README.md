@@ -1,149 +1,99 @@
-# AeroNetB Traceability API — 使用说明
+# AeroNetB Aerospace 数据库应用
 
-本项目是一个基于 FastAPI + SQLAlchemy + SQLite 的供应链与质量可追溯系统原型，提供原材料追溯、批次关联、质量风险预警等模块，并带有基础的 JWT 认证与管理员权限控制。
+本项目是一个使用 FastAPI + SQLAlchemy + SQLite 的示例应用，包含基础的认证、客户管理、生产订单、组件-零件关系等接口，并提供网页仪表盘页面。支持打包为单文件 EXE 便于分发。
 
-## 目录
-- 项目结构
-- 环境与准备
-- 安装依赖
-- 启动服务
-- 认证与权限
-- 主要接口速览
-- 示例请求（PowerShell）
-- Web 页面
-- 数据持久化
-- 常见问题
+## 环境要求
+- Windows 10/11
+- Python 3.10+（建议 3.10/3.11）
 
-## 项目结构
+## 1. 开发运行（源代码）
+1) 安装依赖：
 ```
-app.db                      # SQLite 数据库（运行后自动生成/使用）
-db_clients.py               # 可选：数据库或客户相关辅助（若使用）
-main.py                     # FastAPI 入口（路由、认证、CRUD）
-models.py                   # SQLAlchemy 模型定义
-requirements.txt            # Python 依赖清单
-static/                     # 前端静态资源
-templates/                  # Jinja2 模板（index.html 仪表盘）
-Supply Chain and Quality Traceability Database Design Specification for AeroNetB Aerospace.md
-```
-
-## 环境与准备
-- 操作系统：Windows（PowerShell）
-- Python：建议 3.8+（项目 __pycache__ 显示曾使用 3.8）
-
-## 安装依赖
-在项目根目录（含 `requirements.txt` 的位置）执行：
-
-```powershell
+python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
-
-若您未安装 `pip` 或权限不足，请以管理员 PowerShell 运行或安装最新 Python。
-
-## 启动服务
-本项目使用 Uvicorn 作为 ASGI 服务器。启动后会自动创建/迁移表，并在数据库中植入一个管理员用户：
-- 管理员账户：`admin`
-- 初始密码：`admin123`
-
-启动命令：
-```powershell
-.\.venv\Scripts\Activate.ps1; uvicorn main:app --reload --host 0.0.0.0 --port 8000
+2) 启动服务：
 ```
-访问：
-- API 根：`http://localhost:8000/`
-- 仪表盘：`http://localhost:8000/dashboard`
-- OpenAPI/Swagger：`http://localhost:8000/docs`
-- ReDoc：`http://localhost:8000/redoc`
+python main.py
+```
+3) 打开浏览器访问：
+- 仪表盘页面：http://127.0.0.1:8000/dashboard
+- 健康检查接口：http://127.0.0.1:8000/
 
-## 认证与权限
-本项目使用 JWT Bearer 认证：
-- 登录接口：`POST /auth/login`（使用 OAuth2PasswordRequestForm 兼容表单字段）
-- 成功登录后返回 `access_token`，在后续请求头中以 `Authorization: Bearer <token>` 携带
-- 管理员专用接口需要管理员角色（`require_admin`），默认仅 `admin` 账户具备
+初始会创建一个管理账号：
+- 用户名：admin
+- 密码：admin123
 
-安全参数（位于 `main.py` 顶部）：
-- `SECRET_KEY`：默认占位，请在生产环境改为强随机值
-- `ACCESS_TOKEN_EXPIRE_MINUTES`：令牌有效期（默认 8 小时）
+## 2. 接口简述
+- POST /auth/login 使用用户名密码登录，返回 Bearer Token
+- GET /me 使用 Authorization: Bearer <token> 获取当前用户信息
+- 客户管理：
+  - POST /clients 创建客户（管理员权限）
+  - GET /clients 列出客户
+  - GET /clients/{clientid} 获取客户
+  - DELETE /clients/{clientid} 删除客户（管理员权限）
+- 生产订单：
+  - POST /production-orders 创建订单（管理员权限）
+  - GET /production-orders 列出订单
+  - GET /production-orders/{orderid} 获取订单
+  - DELETE /production-orders/{orderid} 删除订单（管理员权限）
+- 组件-零件关系：
+  - POST /component-part-relations 创建关系（管理员权限）
+  - GET /component-part-relations 列出关系
+  - GET /component-part-relations/{relationid} 获取关系
+  - DELETE /component-part-relations/{relationid} 删除关系（管理员权限）
 
-## 主要接口速览
-以下为核心模块的 CRUD 概览（具体字段见 `main.py` 中 Pydantic schema 与 `models.py` 中 SQLAlchemy 模型）：
+示例：登录并调用受保护接口
+```
+POST http://127.0.0.1:8000/auth/login
+Content-Type: application/x-www-form-urlencoded
 
-- 原材料追溯 RawMaterialTraceRecord
-  - `POST /raw-material-trace`（管理员）创建
-  - `GET /raw-material-trace` 列表
-  - `GET /raw-material-trace/{traceid}` 查询单条
-  - `DELETE /raw-material-trace/{traceid}`（管理员）删除
-
-- 批次追溯关联 BatchTraceRelation
-  - `POST /batch-trace-relations`（管理员）创建
-  - `GET /batch-trace-relations` 列表
-  - `GET /batch-trace-relations/{relationid}` 查询单条
-  - `DELETE /batch-trace-relations/{relationid}`（管理员）删除
-
-- 质量风险预警 QualityRiskWarning
-  - `POST /quality-risk-warnings`（管理员）创建
-  - `GET /quality-risk-warnings` 列表
-  - `GET /quality-risk-warnings/{warningid}` 查询单条
-  - `DELETE /quality-risk-warnings/{warningid}`（管理员）删除
-
-## 示例请求（PowerShell）
-以下示例展示登录并访问需要认证的接口：
-
-1) 登录获取 token
-```powershell
-$resp = Invoke-RestMethod -Method Post -Uri http://localhost:8000/auth/login -Body @{username='admin'; password='admin123'} -ContentType 'application/x-www-form-urlencoded'
-$token = $resp.access_token
-$headers = @{ Authorization = "Bearer $token" }
+username=admin&password=admin123
+```
+将返回的 access_token 用作后续请求的 Authorization 头：
+```
+Authorization: Bearer <access_token>
 ```
 
-2) 创建原材料追溯记录（管理员）
-```powershell
-$body = @{
-  traceid='T20241203001'
-  materialbatchno='MBN-001'
-  tracecode='TRC-RAW-001'
-  supplierid='SUP-01'
-  purchaseorderid='PO-2024-001'
-  incominginspectionid='IQC-0001'
-  storagelocation='WH-A-01'
-  usedrecords=@()
-  remainingqty=100.5
-  tracestatus='In Stock'
-} | ConvertTo-Json
+## 3. 打包为 EXE
+项目已提供打包脚本 `build_exe.py`，使用 PyInstaller 生成单文件 EXE，并复制 `static/` 与 `templates/` 到输出目录。
 
-Invoke-RestMethod -Method Post -Uri http://localhost:8000/raw-material-trace -Headers $headers -Body $body -ContentType 'application/json'
+步骤：
+1) 安装打包依赖（需要 pyinstaller）：
 ```
-
-3) 列表查询
-```powershell
-Invoke-RestMethod -Method Get -Uri http://localhost:8000/raw-material-trace -Headers $headers
+pip install -r requirements.txt
+pip install pyinstaller
 ```
-
-4) 删除记录（管理员）
-```powershell
-Invoke-RestMethod -Method Delete -Uri http://localhost:8000/raw-material-trace/T20241203001 -Headers $headers
+2) 运行打包脚本：
 ```
+python build_exe.py
+```
+3) 完成后在 `dist/` 目录下会生成：
+- `main.exe` 单文件可执行程序
+- `static/` 与 `templates/` 资源目录
 
-同理可对 `batch-trace-relations` 与 `quality-risk-warnings` 执行 CRUD 操作。注意：
-- 创建批次关联时，`materialtracecode` 必须存在于原材料追溯记录中（由服务端校验）。
+## 4. 运行 EXE
+双击 `dist/main.exe` 或命令行运行：
+```
+.\u005Cdistmain.exe
+```
+默认监听 `127.0.0.1:8000`，使用方式与开发模式一致：访问 `/dashboard` 或调用各接口。
 
-## Web 页面
-- 仪表盘：`/dashboard` 使用 `templates/index.html` 与 `static/styles.css` 渲染。当前主要用于占位与可视化入口。
+注意：首次运行会在程序根目录生成 SQLite 数据库文件 `app.db`。若使用 EXE，数据库位于与 EXE 同目录（工作目录）下。
 
-## 数据持久化
-- 默认数据库：`sqlite:///./app.db`
-- 首次启动将自动创建表，并植入管理员账户（如不存在）
-- 若需要迁移到其他数据库，请修改 `main.py` 中 `SQLALCHEMY_DATABASE_URL` 以及 `create_engine` 参数
+## 5. 常见问题
+- 端口占用：若 8000 端口被占用，请先关闭占用进程或修改 `main.py` 末尾的端口后再打包。
+- 密钥：`SECRET_KEY` 为示例值，生产环境请替换为安全的随机字符串。
+- 权限：部分接口需要管理员权限，请使用初始账号或自行创建管理员用户。
 
-## 常见问题（FAQ）
-- 登录返回 401：确认用户名/密码；默认管理员为 `admin/admin123`
-- 调用管理员接口返回 403：确认请求头中带有 `Authorization: Bearer <token>` 且用户角色为 `admin`
-- 令牌无效或过期：重新调用 `/auth/login` 获取新 token；检查系统时间与 `ACCESS_TOKEN_EXPIRE_MINUTES`
-- 启动报错缺少模块：确保已激活虚拟环境并安装了 `requirements.txt`
+## 6. 结构
+- `main.py` 启动 FastAPI 应用及路由
+- `models.py` 通过 SQLAlchemy 定义数据表
+- `templates/` Jinja2 模板（仪表盘页面）
+- `static/` 静态资源（样式表等）
+- `build_exe.py` 打包脚本
+- `requirements.txt` 依赖列表
 
-## 开发/测试建议
-- 通过 `http://localhost:8000/docs` 使用内置 Swagger 调试所有接口
-- 使用仓库中的 `test_main.http` 在 IDE 中快速发起请求（记得先登录并替换 Bearer token）
-- 对生产环境务必更换 `SECRET_KEY`，并启用 HTTPS、完善用户体系、审计与日志
+## 7. 许可证
+示例项目，未设置许可证。若需分发，请添加适当许可证文件并遵守依赖的许可证条款。
 
----
-如需扩展功能（分页查询、复杂筛选、批量导入、审计日志、操作记录、权限细粒度控制等），可以在 `models.py` 与 `main.py` 中新增字段与路由，并补充前端展示。
